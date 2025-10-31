@@ -25,9 +25,9 @@
 
 > (Place your screenshots into a `screenshots/` folder and update the paths below.)
 
-![Screenshot #1](screenshots/mediasane-1.png)
-![Screenshot #2](screenshots/mediasane-2.png)
-![Screenshot #3](screenshots/mediasane-3.png)
+![Screenshot #1](screenshots/screenshot-1.png)
+![Screenshot #2](screenshots/screenshot-2.png)
+![Screenshot #3](screenshots/screenshot-3.png)
 
 * * *
 
