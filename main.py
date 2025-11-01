@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QEvent
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QAction
 from PyQt6.QtGui import QPixmap
@@ -45,7 +45,7 @@ from typing import Optional
 from typing import Tuple
 
 # Define 'VERSION'
-VERSION = "v1.1.1"
+VERSION = "v1.1.2"
 
 # Define 'APPNAME'
 APPNAME = "MediaSane"
@@ -96,9 +96,9 @@ class SysUtils:
         Returns image or video prefix based on allowed extension sets.
         Empty string means unsupported or unknown media type."""
         if extlc in ALLOWIMG:
-            return prefs.img_prefix
+            return prefs.imgprefix
         if extlc in ALLOWVID:
-            return prefs.vid_prefix
+            return prefs.vidprefix
         return ""
 
     # Define 'exifdate'
@@ -148,9 +148,9 @@ class SysUtils:
             return name[:8]
         return ""
 
-    # Define 'datemtime'
+    # Define 'datetime'
     @staticmethod
-    def datemtime(path: Path) -> str:
+    def datetime(path: Path) -> str:
         """Return file modification time as YYYYMMDD.
         Uses os.stat to read mtime and formats it compactly.
         Returns empty string on errors or inaccessible files."""
@@ -185,9 +185,9 @@ class SysUtils:
         sha = hashlib.sha256()
         timeout = False
         try:
-            with path.open("rb", buffering=1024 * 1024) as f:
+            with path.open("rb", buffering=1024 * 1024) as fh:
                 while True:
-                    chunk = f.read(1024 * 1024)
+                    chunk = fh.read(1024 * 1024)
                     if not chunk:
                         break
                     sha.update(chunk)
@@ -202,8 +202,8 @@ class SysUtils:
 
         quick = b""
         try:
-            with path.open("rb") as f:
-                quick = f.read(quick_prefix_bytes)
+            with path.open("rb") as fh2:
+                quick = fh2.read(quick_prefix_bytes)
         except (OSError, IOError):
             quick = b""
         bl = hashlib.blake2b(quick).hexdigest()
@@ -236,18 +236,18 @@ class ExecPrefs:
     Stores prefixes for images and videos used during renaming.
     Serializable to/from dict for config persistence."""
 
-    # Define 'img_prefix'
-    img_prefix: str = "IMG-"
+    # Define 'imgprefix'
+    imgprefix: str = "IMG-"
 
-    # Define 'vid_prefix'
-    vid_prefix: str = "VID-"
+    # Define 'vidprefix'
+    vidprefix: str = "VID-"
 
     # Function 'todict'
     def todict(self) -> Dict[str, str]:
         """Serialize preferences to a plain dict.
         Intended for lightweight config storage and merging.
         Keys mirror dataclass fields for simplicity."""
-        return {"img_prefix": self.img_prefix, "vid_prefix": self.vid_prefix}
+        return {"imgprefix": self.imgprefix, "vidprefix": self.vidprefix}
 
     # Function 'fromdict'
     @staticmethod
@@ -256,8 +256,8 @@ class ExecPrefs:
         Unknown keys are ignored; defaults are applied as needed.
         Ensures safe loading from partially filled configs."""
         return ExecPrefs(
-            img_prefix=str(d.get("img_prefix", "IMG-")),
-            vid_prefix=str(d.get("vid_prefix", "VID-")),
+            imgprefix=str(d.get("imgprefix", "IMG-")),
+            vidprefix=str(d.get("vidprefix", "VID-")),
         )
 
 
@@ -294,7 +294,7 @@ class ConfigManager:
         Values are persisted as simple key=value lines."""
         try:
             CONFIGPATH.mkdir(parents=True, exist_ok=True)
-            lines = [f"img_prefix={prefs.img_prefix}", f"vid_prefix={prefs.vid_prefix}"]
+            lines = [f"imgprefix={prefs.imgprefix}", f"vidprefix={prefs.vidprefix}"]
             for k, v in other.items():
                 lines.append(f"{k}={v}")
             CONFIGFILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -369,23 +369,23 @@ class MediaRenamer:
         files: List[Path] = []
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames if d != ".duplicates"]
-            for fn in filenames:
-                p = Path(dirpath) / fn
-                ext = SysUtils.lowerext(p)
+            for fname in filenames:
+                file_path = Path(dirpath) / fname
+                ext = SysUtils.lowerext(file_path)
                 if ext in ALLOWIMG or ext in ALLOWVID:
-                    files.append(p)
+                    files.append(file_path)
         return files
 
     # Define 'resolvedate'
-    def resolvedate(self, p: Path) -> str:
+    def resolvedate(self, path_in: Path) -> str:
         """Resolve a best-fit date for a media file as YYYYMMDD.
         Tries name prefix, then EXIF/metadata, then mtime, then today.
         Provides a deterministic fallback chain for robust naming."""
-        d = SysUtils.datename(p.stem)
+        d = SysUtils.datename(path_in.stem)
         if not d:
-            d = SysUtils.exifdate(p, timeouts=self.opts.metatimeout)
+            d = SysUtils.exifdate(path_in, timeouts=self.opts.metatimeout)
         if not d:
-            d = SysUtils.datemtime(p)
+            d = SysUtils.datetime(path_in)
         if not d:
             d = SysUtils.datetoday()
         return d
@@ -401,106 +401,195 @@ class MediaRenamer:
         candidates: List[Tuple[str, float, str, Path, str]] = []
         files = self.enumfiles(src)
 
-        for p in files:
+        for fpath in files:
             self.checkstop()
-            extlc = SysUtils.lowerext(p)
+            extlc = SysUtils.lowerext(fpath)
             prefix = SysUtils.classify(extlc, self.prefs)
             if not prefix:
-                self.results.append((str(p), "(unsupported)"))
+                self.results.append((str(fpath), "(unsupported)"))
                 continue
 
-            hk, _to = SysUtils.hashkey(p, hash_budget_s=self.opts.hashtimeout)
+            hk, ho = SysUtils.hashkey(fpath, hash_budget_s=self.opts.hashtimeout)
             if hk in self.hashseen:
                 if self.opts.keepdupes:
-                    dup_dir = out / ".duplicates"
-                    base = p.name
-                    dest = dup_dir / base
+                    dupdir = out / ".duplicates"
+                    base = fpath.name
+                    dest = dupdir / base
                     n = 0
                     while dest.exists():
                         n += 1
-                        dest = dup_dir / f"{base}.{n}"
-                    self.actdupes.append((p, "move", dest))
-                    self.results.append((str(p), str(dest)))
+                        dest = dupdir / f"{base}.{n}"
+                    self.actdupes.append((fpath, "move", dest))
+                    self.results.append((str(fpath), str(dest)))
                 else:
-                    self.actdupes.append((p, "delete", None))
-                    self.results.append((str(p), "(deleted)"))
+                    self.actdupes.append((fpath, "delete", None))
+                    self.results.append((str(fpath), "(deleted)"))
                 continue
             else:
-                self.hashseen[hk] = p
+                self.hashseen[hk] = fpath
 
-            d = self.resolvedate(p)
-            mt = p.stat().st_mtime if p.exists() else 0.0
-            candidates.append((d, mt, p.name, p, prefix))
+            d = self.resolvedate(fpath)
+            mt = fpath.stat().st_mtime if fpath.exists() else 0.0
+            candidates.append((d, mt, fpath.name, fpath, prefix))
 
         candidates.sort(key=lambda t: (t[0], t[1], t[2]))
-        seq = 0
-        for (d, _mt, _nm, p, prefix) in candidates:
+        countdate: Dict[str, int] = {}
+
+        for (d, _mt, _nm, fpath, prefix) in candidates:
             self.checkstop()
-            seq += 1
-            final_dst = (out / f"{prefix}{d}-{seq:05d}.{SysUtils.lowerext(p)}")
-            tmp_dst = final_dst.with_suffix(final_dst.suffix + f".tmp-{uuid.uuid4().hex[:8]}")
-            self.actrenames.append((p, tmp_dst, final_dst))
-            self.results.append((str(p), str(final_dst)))
+            seq = countdate.get(d, 0) + 1
+            countdate[d] = seq
+            enddst = (out / f"{prefix}{d}-{seq:05d}.{SysUtils.lowerext(fpath)}")
+            tmpdst = enddst.with_suffix(enddst.suffix + f".tmp-{uuid.uuid4().hex[:8]}")
+            self.actrenames.append((fpath, tmpdst, enddst))
+            self.results.append((str(fpath), str(enddst)))
 
     # Define 'execute'
     def execute(self):
         """Execute planned duplicate handling and renames.
         Performs safe moves to temporary paths before finalization.
         Emits a row (old,new) to the queue for each processed file."""
+        # Announce total number of files that will be renamed
+        total_renames = len(self.actrenames)
+        self.rowsink.put(("__TOTAL__", str(total_renames)))
+
         if self.opts.dryrun:
             for old, new in self.results:
                 self.checkstop()
                 self.rowsink.put((old, new))
             return
 
-        for src, action, dest in self.actdupes:
+        for srcpath, action, dest_path in self.actdupes:
             self.checkstop()
             if action == "move":
-                assert dest is not None
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                SysUtils.safemove(src, dest)
+                assert dest_path is not None
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                SysUtils.safemove(srcpath, dest_path)
+                self.rowsink.put((str(srcpath), str(dest_path)))
             elif action == "delete":
                 try:
-                    src.unlink(missing_ok=True)
+                    srcpath.unlink(missing_ok=True)
                 except (OSError, PermissionError):
                     pass
+                self.rowsink.put((str(srcpath), "(deleted)"))
 
-        for src, tmp_dst, _final in self.actrenames:
+        processed = 0
+        for srcpath, tmpdst, final in self.actrenames:
             self.checkstop()
-            tmp_dst.parent.mkdir(parents=True, exist_ok=True)
-            if src.exists():
-                SysUtils.safemove(src, tmp_dst)
 
-        for _src, tmp_dst, final in self.actrenames:
-            self.checkstop()
-            if not tmp_dst.exists():
-                continue
-            cand = final
-            i = 1
-            while cand.exists():
-                cand = final.with_name(final.stem + f"_{i}" + final.suffix)
-                i += 1
-            try:
-                tmp_dst.rename(cand)
-            except OSError:
-                # fallback copy
+            tmpdst.parent.mkdir(parents=True, exist_ok=True)
+            if srcpath.exists():
+                SysUtils.safemove(srcpath, tmpdst)
+
+            if tmpdst.exists():
+                cand = final
+                i = 1
+                while cand.exists():
+                    cand = final.with_name(final.stem + f"_{i}" + final.suffix)
+                    i += 1
                 try:
-                    shutil.copy2(tmp_dst, cand)
-                    tmp_dst.unlink(missing_ok=True)
-                except (OSError, IOError):
-                    pass
+                    tmpdst.rename(cand)
+                except OSError:
+                    try:
+                        shutil.copy2(tmpdst, cand)
+                        tmpdst.unlink(missing_ok=True)
+                    except (OSError, IOError):
+                        pass
 
-        for old, new in self.results:
+                self.rowsink.put((str(srcpath), str(cand)))
+                processed += 1
+                self.rowsink.put(("__COUNT__", f"{processed}"))
+
+    # Function 'streamrun'
+    def streamrun(self):
+        """Stream files one-by-one with progressive UI updates.
+        Enumerates, hashes, decides destination, moves, and reports.
+        Preserves date-group numbering that restarts at each date."""
+        src = Path(self.opts.srcdir)
+        out = Path(self.opts.outdir) if self.opts.outdir else src
+
+        files = self.enumfiles(src)
+        self.rowsink.put(("__TOTAL__", str(len(files))))
+        sortable: List[Tuple[str, float, str, Path, str]] = []
+        for fpath in files:
             self.checkstop()
-            self.rowsink.put((old, new))
+            extlc = SysUtils.lowerext(fpath)
+            prefix = SysUtils.classify(extlc, self.prefs)
+            if not prefix:
+                self.rowsink.put((str(fpath), "(unsupported)"))
+                continue
+            d = self.resolvedate(fpath)
+            mt = fpath.stat().st_mtime if fpath.exists() else 0.0
+            sortable.append((d, mt, fpath.name, fpath, prefix))
+
+        sortable.sort(key=lambda t: (t[0], t[1], t[2]))
+        countdate: Dict[str, int] = {}
+        processed = 0
+
+        for (d, _mt, _nm, fpath, prefix) in sortable:
+            self.checkstop()
+
+            hk, ho = SysUtils.hashkey(fpath, hash_budget_s=self.opts.hashtimeout)
+            if hk in self.hashseen:
+                if self.opts.keepdupes:
+                    dupdir = out / ".duplicates"
+                    dest = dupdir / fpath.name
+                    n = 0
+                    while dest.exists():
+                        n += 1
+                        dest = dupdir / f"{fpath.name}.{n}"
+                    dupdir.mkdir(parents=True, exist_ok=True)
+                    SysUtils.safemove(fpath, dest)
+                    self.rowsink.put((str(fpath), str(dest)))
+                else:
+                    try:
+                        fpath.unlink(missing_ok=True)
+                    except (OSError, PermissionError):
+                        pass
+                    self.rowsink.put((str(fpath), "(deleted)"))
+                processed += 1
+                self.rowsink.put(("__COUNT__", f"{processed}"))
+                continue
+            else:
+                self.hashseen[hk] = fpath
+
+            seq = countdate.get(d, 0) + 1
+            countdate[d] = seq
+
+            enddst = (out / f"{prefix}{d}-{seq:05d}.{SysUtils.lowerext(fpath)}")
+            tmpdst = enddst.with_suffix(enddst.suffix + f".tmp-{uuid.uuid4().hex[:8]}")
+            tmpdst.parent.mkdir(parents=True, exist_ok=True)
+
+            if not self.opts.dryrun:
+                if fpath.exists():
+                    SysUtils.safemove(fpath, tmpdst)
+
+                cand = enddst
+                i = 1
+                while cand.exists():
+                    cand = enddst.with_name(enddst.stem + f"_{i}" + enddst.suffix)
+                    i += 1
+                try:
+                    tmpdst.rename(cand)
+                except OSError:
+                    try:
+                        shutil.copy2(tmpdst, cand)
+                        tmpdst.unlink(missing_ok=True)
+                    except (OSError, IOError):
+                        pass
+                self.rowsink.put((str(fpath), str(cand)))
+            else:
+                self.rowsink.put((str(fpath), str(enddst)))
+
+            processed += 1
+            self.rowsink.put(("__COUNT__", f"{processed}"))
 
     # Define 'run'
     def run(self):
         """Run the full pipeline: plan then execute.
         Intended to be called from a worker thread in the GUI.
         Raises on cancellation and reports results progressively."""
-        self.plan()
-        self.execute()
+        self.streamrun()
 
 
 # Class 'DialogPrefs'
@@ -524,8 +613,8 @@ class DialogPrefs(QDialog):
 
         wnaming = QWidget()
         g = QFormLayout(wnaming)
-        self.editimg = QLineEdit(self.prefs.img_prefix)
-        self.editvid = QLineEdit(self.prefs.vid_prefix)
+        self.editimg = QLineEdit(self.prefs.imgprefix)
+        self.editvid = QLineEdit(self.prefs.vidprefix)
         g.addRow(QLabel("Image prefix:"), self.editimg)
         g.addRow(QLabel("Video prefix:"), self.editvid)
         tabs.addTab(wnaming, "Naming")
@@ -547,8 +636,8 @@ class DialogPrefs(QDialog):
         """Return sanitized ExecPrefs based on user input.
         Falls back to defaults when fields are left blank.
         Intended to be called after dialog acceptance."""
-        self.prefs.img_prefix = self.editimg.text().strip() or "IMG-"
-        self.prefs.vid_prefix = self.editvid.text().strip() or "VID-"
+        self.prefs.imgprefix = self.editimg.text().strip() or "IMG-"
+        self.prefs.vidprefix = self.editvid.text().strip() or "VID-"
         return self.prefs
 
 
@@ -570,22 +659,22 @@ class DialogAbout(QDialog):
 
         logolabel = QLabel()
         logolabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        candidate_paths = [
+        cpaths = [
             Path("/usr/share/pixmaps/mediasane.png"),
             Path(__file__).resolve().parent / "logo.png",
             CONFIGPATH / "logo.png",
         ]
-        pix: Optional[QPixmap] = None
-        for pth in candidate_paths:
-            if pth.is_file():
-                tmp = QPixmap(str(pth))
+        pixmap: Optional[QPixmap] = None
+        for cpath in cpaths:
+            if cpath.is_file():
+                tmp = QPixmap(str(cpath))
                 if not tmp.isNull():
-                    pix = tmp
+                    pixmap = tmp
                     break
 
-        if pix:
+        if pixmap:
             logolabel.setPixmap(
-                pix.scaled(
+                pixmap.scaled(
                     128, 128,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation
@@ -642,7 +731,12 @@ class MediaSane(QWidget):
 
         self.workerthread: Optional[threading.Thread] = None
         self.worker: Optional[MediaRenamer] = None
-        self.row_queue: "queue.Queue[Tuple[str,str]]" = queue.Queue()
+        self.rowqueue: "queue.Queue[Tuple[str,str]]" = queue.Queue()
+
+        # Progress counter state
+        self.total_files: int = 0
+        self.namecount: int = 0
+        self.rowindex: Dict[str, int] = {}
 
         menubar = QMenuBar(self)
         mfile = menubar.addMenu("File")
@@ -677,9 +771,9 @@ class MediaSane(QWidget):
         outrow.addWidget(self.outedit, 1)
         outrow.addWidget(self.outbtn)
 
-        self.chk_keepdupes = QCheckBox("Keep duplicates (move to .duplicates)")
+        self.checkdupes = QCheckBox("Keep duplicates (move to .duplicates)")
         optrow = QHBoxLayout()
-        optrow.addWidget(self.chk_keepdupes)
+        optrow.addWidget(self.checkdupes)
         optrow.addStretch()
 
         self.btndry = QPushButton("Dry-Run")
@@ -720,14 +814,89 @@ class MediaSane(QWidget):
         root.addWidget(self.progress)
         self.setLayout(root)
 
+        # Floating counter
+        self.counterbox = QWidget(self)
+        self.counterbox.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        v = QVBoxLayout(self.counterbox)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(2)
+        self.countertitle = QLabel("Files", self.counterbox)
+        self.countertitle.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.countertitle.setStyleSheet("font-weight: 600;")
+        self.countervalue = QLabel("0/0", self.counterbox)
+        self.countervalue.setAlignment(Qt.AlignmentFlag.AlignRight)
+        self.countervalue.setStyleSheet("font-weight: 600;")
+        v.addWidget(self.countertitle)
+        v.addWidget(self.countervalue)
+        self.counterbox.adjustSize()
+        self.installEventFilter(self)
+
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.flushrows)
-        self.timer.start(100)
+        self.timer.start(50)
 
+        # Load prefs only
         cfg = ConfigManager.load()
         self.prefs = ExecPrefs.fromdict(cfg)
-        self.srcedit.setText(cfg.get("last_src", ""))
-        self.outedit.setText(cfg.get("last_out", ""))
+        self.srcedit.setText("")
+        self.outedit.setText("")
+
+        # If user pastes a path manually
+        self.srcedit.editingFinished.connect(self.try_populate_from_text)
+
+    # Function 'try_populate_from_text'
+    def try_populate_from_text(self):
+        """Populate table when user types a valid source path.
+        Triggered when the Source field editing is finished.
+        Avoids needing to re-open the directory dialog."""
+        srcpath = self.srcedit.text().strip()
+        if srcpath and Path(srcpath).is_dir():
+            self.populate_table_with_dir(srcpath)
+
+    # Function 'ensureposition'
+    def ensureposition(self):
+        """Reposition the floating counter widget.
+        Places it at the top-right, just under the Output row.
+        Called on resize/show events to keep it aligned."""
+        right_margin = 10
+        top_offset = self.outedit.geometry().bottom() + 6
+        x = self.width() - self.counterbox.width() - right_margin
+        y = top_offset
+        self.counterbox.move(max(0, x), max(0, y))
+        self.counterbox.raise_()
+
+    # Function 'eventFilter'
+    def eventFilter(self, obj, ev: QEvent):
+        """Qt event filter for resize/show events.
+        Keeps the counter box aligned to the top-right corner.
+        Lightweight and avoids extra layout lines."""
+        if obj is self and ev.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            self.ensureposition()
+        return super().eventFilter(obj, ev)
+
+    # Function 'populate_table_with_dir'
+    def populate_table_with_dir(self, directory: str):
+        """Populate the table with files from a directory.
+        Clears previous rows and lists supported media immediately.
+        Initializes the counter to 0 / total files detected."""
+        self.table.setRowCount(0)
+        self.rowindex.clear()
+        try:
+            paths = MediaRenamer.enumfiles(Path(directory))
+        except (OSError, PermissionError):
+            paths = []
+        paths.sort(key=lambda p: str(p))
+        for fpath in paths:
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            self.table.setItem(r, 0, QTableWidgetItem(str(fpath)))
+            self.table.setItem(r, 1, QTableWidgetItem(""))
+            self.rowindex[str(fpath)] = r
+        self.total_files = len(paths)
+        self.namecount = 0
+        self.countervalue.setText(f"{self.namecount}/{self.total_files}")
+        self.counterbox.adjustSize()
+        self.ensureposition()
 
     # Function 'pickdir'
     def pickdir(self, edit: QLineEdit):
@@ -742,6 +911,8 @@ class MediaSane(QWidget):
                 "last_out": self.outedit.text().strip(),
             }
             ConfigManager.save(self.prefs, other)
+            if edit is self.srcedit:
+                self.populate_table_with_dir(d)
 
     # Function 'flushrows'
     def flushrows(self):
@@ -750,11 +921,37 @@ class MediaSane(QWidget):
         Stops when the queue is empty for this cycle."""
         try:
             while True:
-                old, new = self.row_queue.get_nowait()
-                r = self.table.rowCount()
-                self.table.insertRow(r)
-                self.table.setItem(r, 0, QTableWidgetItem(old))
-                self.table.setItem(r, 1, QTableWidgetItem(new))
+                old, new = self.rowqueue.get_nowait()
+                if old == "__TOTAL__":
+                    try:
+                        self.total_files = int(new)
+                    except ValueError:
+                        pass
+                    self.namecount = 0
+                    self.countervalue.setText(f"{self.namecount}/{self.total_files}")
+                    self.counterbox.adjustSize()
+                    self.ensureposition()
+                    continue
+
+                if old == "__COUNT__":
+                    try:
+                        self.namecount = int(new)
+                    except ValueError:
+                        pass
+                    self.countervalue.setText(f"{self.namecount}/{self.total_files}")
+                    self.counterbox.adjustSize()
+                    self.ensureposition()
+                    continue
+
+                if old in self.rowindex:
+                    r = self.rowindex[old]
+                    self.table.setItem(r, 1, QTableWidgetItem(new))
+                else:
+                    r = self.table.rowCount()
+                    self.table.insertRow(r)
+                    self.table.setItem(r, 0, QTableWidgetItem(old))
+                    self.table.setItem(r, 1, QTableWidgetItem(new))
+                    self.rowindex[old] = r
         except queue.Empty:
             pass
 
@@ -809,8 +1006,8 @@ class MediaSane(QWidget):
                 QMessageBox.critical(self, "Error", "Cannot create output directory.")
                 return
 
-        # Reset table for fresh final output list
-        self.table.setRowCount(0)
+        if self.table.rowCount() == 0:
+            self.populate_table_with_dir(src)
 
         self.progress.setVisible(True)
         self.btnstop.setEnabled(True)
@@ -820,12 +1017,12 @@ class MediaSane(QWidget):
         opts = ExecOptions(
             srcdir=src,
             outdir=out,
-            keepdupes=self.chk_keepdupes.isChecked(),
+            keepdupes=self.checkdupes.isChecked(),
             dryrun=dry,
             metatimeout=10,
             hashtimeout=60,
         )
-        self.worker = MediaRenamer(opts, self.prefs, self.row_queue)
+        self.worker = MediaRenamer(opts, self.prefs, self.rowqueue)
 
         # Function 'workload'
         def workload():
@@ -835,7 +1032,7 @@ class MediaSane(QWidget):
             try:
                 self.worker.run()
             except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as e:
-                self.row_queue.put(("ERROR", str(e)))
+                self.rowqueue.put(("ERROR", str(e)))
             finally:
                 self.progress.setVisible(False)
                 self.btnstop.setEnabled(False)
