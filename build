@@ -14,7 +14,7 @@ appname="MediaSane"
 debname="mediasane"
 
 # Define 'debvers'
-debvers="1.1.3"
+debvers="1.1.4"
 
 # Define 'debarch'
 debarch="all"

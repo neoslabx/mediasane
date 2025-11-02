@@ -45,7 +45,7 @@ from typing import Optional
 from typing import Tuple
 
 # Define 'VERSION'
-VERSION = "v1.1.3"
+VERSION = "v1.1.4"
 
 # Define 'APPNAME'
 APPNAME = "MediaSane"
@@ -191,7 +191,7 @@ class SysUtils:
                     if not chunk:
                         break
                     sha.update(chunk)
-                    if (time.monotonic() - t0) > hash_budget_s:
+                    if time.monotonic() - t0 > hash_budget_s:
                         timeout = True
                         break
         except (OSError, IOError):
@@ -207,7 +207,6 @@ class SysUtils:
         except (OSError, IOError):
             quick = b""
         bl = hashlib.blake2b(quick).hexdigest()
-
         return f"sha256:{sha.hexdigest()}|b2b1M:{bl}", False
 
     # Define 'safemove'
@@ -277,10 +276,10 @@ class ConfigManager:
         try:
             if CONFIGFILE.is_file():
                 for line in CONFIGFILE.read_text(encoding="utf-8").splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
+                    strip = line.strip()
+                    if not strip or strip.startswith("#") or "=" not in strip:
                         continue
-                    k, v = line.split("=", 1)
+                    k, v = strip.split("=", 1)
                     data[k.strip()] = v.strip()
         except (OSError, UnicodeDecodeError):
             pass
@@ -390,6 +389,108 @@ class MediaRenamer:
             d = SysUtils.datetoday()
         return d
 
+    # Define 'parsefilename'
+    def parsefilename(self, path: Path) -> Optional[Tuple[str, str, int]]:
+        """Parse a numbered media filename into parts.
+        Returns (prefix, YYYYMMDD, seq) if it matches the scheme.
+        Returns None when the name is not in the target format."""
+        stem = path.stem
+        # Match against the known prefixes only
+        for pfx in (self.prefs.imgprefix, self.prefs.vidprefix):
+            base_len = len(pfx)
+            if not stem.startswith(pfx):
+                continue
+            if len(stem) < base_len + 9:  # YYYYMMDD-SSSSS
+                continue
+            date_part = stem[base_len:base_len + 8]
+            if not date_part.isdigit():
+                continue
+            if stem[base_len + 8] != "-":
+                continue
+            seq_part = stem[base_len + 9:]
+            if len(seq_part) == 5 and seq_part.isdigit():
+                return pfx, date_part, int(seq_part)
+        return None
+
+    # Define 'groupdate'
+    def groupdate(self, out: Path) -> Dict[Tuple[str, str], List[Path]]:
+        """Collect already-named files in the output by date.
+        Groups by (prefix, YYYYMMDD) across all allowed extensions.
+        Excludes the internal .duplicates directory."""
+        groups: Dict[Tuple[str, str], List[Path]] = {}
+        try:
+            for dirpath, dirnames, filenames in os.walk(out):
+                if ".duplicates" in dirnames:
+                    dirnames.remove(".duplicates")
+                for fname in filenames:
+                    path_obj = Path(dirpath) / fname
+                    parsed = self.parsefilename(path_obj)
+                    if not parsed:
+                        continue
+                    key = (parsed[0], parsed[1])
+                    groups.setdefault(key, []).append(path_obj)
+        except (OSError, PermissionError):
+            pass
+        return groups
+
+    # Define 'seqall'
+    def seqall(self, out: Path):
+        """Normalize numbering to start at 00001 for each date group.
+        Renames both existing and newly added files to fill gaps.
+        Uses temp placeholders to avoid collisions during renames."""
+        groups = self.groupdate(out)
+        for key, paths in groups.items():
+            self.checkstop()
+            try:
+                paths.sort(key=lambda x: (x.stat().st_mtime, x.name))
+            except OSError:
+                paths.sort(key=lambda x: x.name)
+
+            prefix, date = key
+            targets: Dict[Path, Path] = {}
+            for idx, srcpath in enumerate(paths, start=1):
+                extlc = SysUtils.lowerext(srcpath)
+                dest = out / f"{prefix}{date}-{idx:05d}.{extlc}"
+                if dest != srcpath:
+                    targets[srcpath] = dest
+
+            if not targets:
+                continue
+
+            tmpmap: Dict[Path, Path] = {}
+            for src in list(targets.keys()):
+                tmp = src.with_name(src.name + f".reseq-{uuid.uuid4().hex[:8]}")
+                try:
+                    src.rename(tmp)
+                except OSError:
+                    try:
+                        shutil.copy2(src, tmp)
+                        src.unlink(missing_ok=True)
+                    except (OSError, IOError):
+                        continue
+                tmpmap[src] = tmp
+
+            for src, final in targets.items():
+                tmp = tmpmap.get(src)
+                if not tmp:
+                    continue
+                final.parent.mkdir(parents=True, exist_ok=True)
+                cand = final
+                while cand.exists():
+                    stem = cand.stem
+                    j = stem.rfind("-")
+                    num = int(stem[j + 1:]) + 1 if j != -1 else 1
+                    cand = cand.with_name(stem[:j + 1] + f"{num:05d}" + cand.suffix)
+                try:
+                    tmp.rename(cand)
+                except OSError:
+                    try:
+                        shutil.copy2(tmp, cand)
+                        tmp.unlink(missing_ok=True)
+                    except (OSError, IOError):
+                        continue
+                self.rowsink.put((str(src), str(cand)))
+
     # Define 'plan'
     def plan(self):
         """Plan duplicate handling and final rename destinations.
@@ -409,7 +510,7 @@ class MediaRenamer:
                 self.results.append((str(fpath), "(unsupported)"))
                 continue
 
-            hk, ho = SysUtils.hashkey(fpath, hash_budget_s=self.opts.hashtimeout)
+            hk, _ = SysUtils.hashkey(fpath, hash_budget_s=self.opts.hashtimeout)
             if hk in self.hashseen:
                 if self.opts.keepdupes:
                     dupdir = out / ".duplicates"
@@ -457,6 +558,8 @@ class MediaRenamer:
             for old, new in self.results:
                 self.checkstop()
                 self.rowsink.put((old, new))
+            out = Path(self.opts.outdir) if self.opts.outdir else Path(self.opts.srcdir)
+            self.seqall(out)
             return
 
         for srcpath, action, dest_path in self.actdupes:
@@ -481,108 +584,44 @@ class MediaRenamer:
             if srcpath.exists():
                 SysUtils.safemove(srcpath, tmpdst)
 
-            if tmpdst.exists():
-                cand = final
-                i = 1
-                while cand.exists():
-                    cand = final.with_name(final.stem + f"_{i}" + final.suffix)
-                    i += 1
-                try:
+            cand = final
+            while cand.exists():
+                stem = cand.stem
+                i = stem.rfind("-")
+                if i == -1 or not stem[i + 1:].isdigit() or len(stem[i + 1:]) != 5:
+                    break
+                num = int(stem[i + 1:]) + 1
+                cand = cand.with_name(stem[:i + 1] + f"{num:05d}" + cand.suffix)
+
+            try:
+                if tmpdst.exists():
                     tmpdst.rename(cand)
-                except OSError:
-                    try:
+                else:
+                    if srcpath.exists():
+                        shutil.copy2(srcpath, cand)
+                        srcpath.unlink(missing_ok=True)
+            except OSError:
+                try:
+                    if tmpdst.exists():
                         shutil.copy2(tmpdst, cand)
                         tmpdst.unlink(missing_ok=True)
-                    except (OSError, IOError):
-                        pass
+                except (OSError, IOError):
+                    pass
 
-                self.rowsink.put((str(srcpath), str(cand)))
-                processed += 1
-                self.rowsink.put(("__COUNT__", f"{processed}"))
+            self.rowsink.put((str(srcpath), str(cand)))
+            processed += 1
+            self.rowsink.put(("__COUNT__", f"{processed}"))
+
+        out = Path(self.opts.outdir) if self.opts.outdir else Path(self.opts.srcdir)
+        self.seqall(out)
 
     # Function 'streamrun'
     def streamrun(self):
         """Stream files one-by-one with progressive UI updates.
         Enumerates, hashes, decides destination, moves, and reports.
         Preserves date-group numbering that restarts at each date."""
-        src = Path(self.opts.srcdir)
-        out = Path(self.opts.outdir) if self.opts.outdir else src
-
-        files = self.enumfiles(src)
-        self.rowsink.put(("__TOTAL__", str(len(files))))
-        sortable: List[Tuple[str, float, str, Path, str]] = []
-        for fpath in files:
-            self.checkstop()
-            extlc = SysUtils.lowerext(fpath)
-            prefix = SysUtils.classify(extlc, self.prefs)
-            if not prefix:
-                self.rowsink.put((str(fpath), "(unsupported)"))
-                continue
-            d = self.resolvedate(fpath)
-            mt = fpath.stat().st_mtime if fpath.exists() else 0.0
-            sortable.append((d, mt, fpath.name, fpath, prefix))
-
-        sortable.sort(key=lambda t: (t[0], t[1], t[2]))
-        countdate: Dict[str, int] = {}
-        processed = 0
-
-        for (d, _mt, _nm, fpath, prefix) in sortable:
-            self.checkstop()
-
-            hk, ho = SysUtils.hashkey(fpath, hash_budget_s=self.opts.hashtimeout)
-            if hk in self.hashseen:
-                if self.opts.keepdupes:
-                    dupdir = out / ".duplicates"
-                    dest = dupdir / fpath.name
-                    n = 0
-                    while dest.exists():
-                        n += 1
-                        dest = dupdir / f"{fpath.name}.{n}"
-                    dupdir.mkdir(parents=True, exist_ok=True)
-                    SysUtils.safemove(fpath, dest)
-                    self.rowsink.put((str(fpath), str(dest)))
-                else:
-                    try:
-                        fpath.unlink(missing_ok=True)
-                    except (OSError, PermissionError):
-                        pass
-                    self.rowsink.put((str(fpath), "(deleted)"))
-                processed += 1
-                self.rowsink.put(("__COUNT__", f"{processed}"))
-                continue
-            else:
-                self.hashseen[hk] = fpath
-
-            seq = countdate.get(d, 0) + 1
-            countdate[d] = seq
-
-            enddst = (out / f"{prefix}{d}-{seq:05d}.{SysUtils.lowerext(fpath)}")
-            tmpdst = enddst.with_suffix(enddst.suffix + f".tmp-{uuid.uuid4().hex[:8]}")
-            tmpdst.parent.mkdir(parents=True, exist_ok=True)
-
-            if not self.opts.dryrun:
-                if fpath.exists():
-                    SysUtils.safemove(fpath, tmpdst)
-
-                cand = enddst
-                i = 1
-                while cand.exists():
-                    cand = enddst.with_name(enddst.stem + f"_{i}" + enddst.suffix)
-                    i += 1
-                try:
-                    tmpdst.rename(cand)
-                except OSError:
-                    try:
-                        shutil.copy2(tmpdst, cand)
-                        tmpdst.unlink(missing_ok=True)
-                    except (OSError, IOError):
-                        pass
-                self.rowsink.put((str(fpath), str(cand)))
-            else:
-                self.rowsink.put((str(fpath), str(enddst)))
-
-            processed += 1
-            self.rowsink.put(("__COUNT__", f"{processed}"))
+        self.plan()
+        self.execute()
 
     # Define 'run'
     def run(self):
@@ -664,6 +703,7 @@ class DialogAbout(QDialog):
             Path(__file__).resolve().parent / "logo.png",
             CONFIGPATH / "logo.png",
         ]
+        
         pixmap: Optional[QPixmap] = None
         for cpath in cpaths:
             if cpath.is_file():
@@ -842,40 +882,19 @@ class MediaSane(QWidget):
         self.outedit.setText("")
 
         # If user pastes a path manually
-        self.srcedit.editingFinished.connect(self.try_populate_from_text)
+        self.srcedit.editingFinished.connect(self.populatetext)
 
-    # Function 'try_populate_from_text'
-    def try_populate_from_text(self):
+    # Function 'populatetext'
+    def populatetext(self):
         """Populate table when user types a valid source path.
         Triggered when the Source field editing is finished.
         Avoids needing to re-open the directory dialog."""
         srcpath = self.srcedit.text().strip()
         if srcpath and Path(srcpath).is_dir():
-            self.populate_table_with_dir(srcpath)
+            self.populatetable(srcpath)
 
-    # Function 'ensureposition'
-    def ensureposition(self):
-        """Reposition the floating counter widget.
-        Places it at the top-right, just under the Output row.
-        Called on resize/show events to keep it aligned."""
-        right_margin = 10
-        top_offset = self.outedit.geometry().bottom() + 6
-        x = self.width() - self.counterbox.width() - right_margin
-        y = top_offset
-        self.counterbox.move(max(0, x), max(0, y))
-        self.counterbox.raise_()
-
-    # Function 'eventFilter'
-    def eventFilter(self, obj, ev: QEvent):
-        """Qt event filter for resize/show events.
-        Keeps the counter box aligned to the top-right corner.
-        Lightweight and avoids extra layout lines."""
-        if obj is self and ev.type() in (QEvent.Type.Resize, QEvent.Type.Show):
-            self.ensureposition()
-        return super().eventFilter(obj, ev)
-
-    # Function 'populate_table_with_dir'
-    def populate_table_with_dir(self, directory: str):
+    # Function 'populatetable'
+    def populatetable(self, directory: str):
         """Populate the table with files from a directory.
         Clears previous rows and lists supported media immediately.
         Initializes the counter to 0 / total files detected."""
@@ -898,6 +917,27 @@ class MediaSane(QWidget):
         self.counterbox.adjustSize()
         self.ensureposition()
 
+    # Function 'ensureposition'
+    def ensureposition(self):
+        """Reposition the floating counter widget.
+        Places it at the top-right, just under the Output row.
+        Called on resize/show events to keep it aligned."""
+        right_margin = 10
+        top_offset = self.outedit.geometry().bottom() + 6
+        x = self.width() - self.counterbox.width() - right_margin
+        y = top_offset
+        self.counterbox.move(max(0, x), max(0, y))
+        self.counterbox.raise_()
+
+    # Function 'eventFilter'
+    def eventFilter(self, obj, ev: QEvent):
+        """Qt event filter for resize/show events.
+        Keeps the counter box aligned to the top-right corner.
+        Lightweight and avoids extra layout lines."""
+        if obj is self and ev.type() in (QEvent.Type.Resize, QEvent.Type.Show):
+            self.ensureposition()
+        return super().eventFilter(obj, ev)
+    
     # Function 'pickdir'
     def pickdir(self, edit: QLineEdit):
         """Open a directory chooser and store the chosen path.
@@ -912,7 +952,7 @@ class MediaSane(QWidget):
             }
             ConfigManager.save(self.prefs, other)
             if edit is self.srcedit:
-                self.populate_table_with_dir(d)
+                self.populatetable(d)
 
     # Function 'flushrows'
     def flushrows(self):
@@ -1007,7 +1047,7 @@ class MediaSane(QWidget):
                 return
 
         if self.table.rowCount() == 0:
-            self.populate_table_with_dir(src)
+            self.populatetable(src)
 
         self.progress.setVisible(True)
         self.btnstop.setEnabled(True)
@@ -1043,7 +1083,7 @@ class MediaSane(QWidget):
         self.workerthread.start()
 
 
-# Class 'eee'
+# Class 'AppEntry'
 class AppEntry:
     """Thin application entry-point wrapper.
     Creates the QApplication and shows the main window.
