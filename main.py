@@ -45,7 +45,7 @@ from typing import Optional
 from typing import Tuple
 
 # Define 'VERSION'
-VERSION = "v1.1.2"
+VERSION = "v1.1.3"
 
 # Define 'APPNAME'
 APPNAME = "MediaSane"
