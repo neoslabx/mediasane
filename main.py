@@ -1214,13 +1214,15 @@ class MediaSane(QWidget):
         anim.setStartValue(1.0)
         anim.setEndValue(0.0)
 
-        # Function 'afterfade'
-        def afterfade():
-            """Finalize fade by clearing the table and removing effect."""
+        # Function 'fadeafter'
+        def fadeafter():
+            """Clears all rows in the table after the fade animation ends.
+            Removes the opacity effect from the table to restore normal appearance.
+            Finalizes the fade-out process by resetting the table to its initial state."""
             self.table.setRowCount(0)
             self.table.setGraphicsEffect(None)
 
-        anim.finished.connect(afterfade)
+        anim.finished.connect(fadeafter)
         self.fadeanimation = anim
         anim.start()
 
