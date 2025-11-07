@@ -78,9 +78,10 @@ sudo dpkg -i mediasane_*_all.deb
 * `(deleted)` for duplicates removed when *Keep duplicates* is unchecked.
 * `(unsupported)` for files with extensions outside the allowed sets.
 
-> Allowed extensions:
-> **Images:** `jpg jpeg png gif tif tiff bmp webp heic heif`
-> **Videos:** `mp4 mov m4v avi mkv 3gp webm`
+**Allowed extensions**
+
+    * **Images:** `jpg jpeg png gif tif tiff bmp webp heic heif`
+    * **Videos:** `mp4 mov m4v avi mkv 3gp webm`
 
 * * *
 

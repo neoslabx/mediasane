@@ -18,6 +18,8 @@ from datetime import datetime
 from pathlib import Path
 from PyQt6.QtCore import Qt, QEvent
 from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QPropertyAnimation
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import QApplication
@@ -39,13 +41,14 @@ from PyQt6.QtWidgets import QTableWidgetItem
 from PyQt6.QtWidgets import QTabWidget
 from PyQt6.QtWidgets import QVBoxLayout
 from PyQt6.QtWidgets import QWidget
+from PyQt6.QtWidgets import QGraphicsOpacityEffect
 from typing import Dict
 from typing import List
 from typing import Optional
 from typing import Tuple
 
 # Define 'VERSION'
-VERSION = "v1.1.4"
+VERSION = "v1.1.6"
 
 # Define 'APPNAME'
 APPNAME = "MediaSane"
@@ -54,10 +57,10 @@ APPNAME = "MediaSane"
 WEBSITEURL = "https://neoslab.com/"
 
 # Define 'CONFIGPATH'
-CONFIGPATH = Path.home()/".config"/"mediasane"
+CONFIGPATH = Path.home() / ".config" / "mediasane"
 
 # Define 'CONFIGFILE'
-CONFIGFILE = CONFIGPATH/"config"
+CONFIGFILE = CONFIGPATH / "config"
 
 # Define 'ALLOWIMG'
 ALLOWIMG = set("jpg jpeg png gif tif tiff bmp webp heic heif".split())
@@ -550,9 +553,8 @@ class MediaRenamer:
         """Execute planned duplicate handling and renames.
         Performs safe moves to temporary paths before finalization.
         Emits a row (old,new) to the queue for each processed file."""
-        # Announce total number of files that will be renamed
-        total_renames = len(self.actrenames)
-        self.rowsink.put(("__TOTAL__", str(total_renames)))
+        totalrenames = len(self.actrenames)
+        self.rowsink.put(("__TOTAL__", str(totalrenames)))
 
         if self.opts.dryrun:
             for old, new in self.results:
@@ -562,13 +564,13 @@ class MediaRenamer:
             self.seqall(out)
             return
 
-        for srcpath, action, dest_path in self.actdupes:
+        for srcpath, action, destpath in self.actdupes:
             self.checkstop()
             if action == "move":
-                assert dest_path is not None
-                dest_path.parent.mkdir(parents=True, exist_ok=True)
-                SysUtils.safemove(srcpath, dest_path)
-                self.rowsink.put((str(srcpath), str(dest_path)))
+                assert destpath is not None
+                destpath.parent.mkdir(parents=True, exist_ok=True)
+                SysUtils.safemove(srcpath, destpath)
+                self.rowsink.put((str(srcpath), str(destpath)))
             elif action == "delete":
                 try:
                     srcpath.unlink(missing_ok=True)
@@ -666,9 +668,9 @@ class DialogPrefs(QDialog):
         btnok.clicked.connect(self.accept)
         btncancel.clicked.connect(self.reject)
 
-        lay = QVBoxLayout(self)
-        lay.addWidget(tabs)
-        lay.addWidget(btns)
+        layout = QVBoxLayout(self)
+        layout.addWidget(tabs)
+        layout.addWidget(btns)
 
     # Define 'values'
     def values(self) -> ExecPrefs:
@@ -703,7 +705,7 @@ class DialogAbout(QDialog):
             Path(__file__).resolve().parent / "logo.png",
             CONFIGPATH / "logo.png",
         ]
-        
+
         pixmap: Optional[QPixmap] = None
         for cpath in cpaths:
             if cpath.is_file():
@@ -715,7 +717,7 @@ class DialogAbout(QDialog):
         if pixmap:
             logolabel.setPixmap(
                 pixmap.scaled(
-                    128, 128,
+                    96, 96,
                     Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation
                 )
@@ -735,23 +737,109 @@ class DialogAbout(QDialog):
         link.setTextFormat(Qt.TextFormat.RichText)
         link.setOpenExternalLinks(True)
 
-        msg = QLabel("Media organizer and renamer\nSort by date, de-duplicate, and safely move photos/videos.")
+        msg = QLabel(
+            "Media organizer and renamer\n"
+            "De-duplicate, and safely move photos/videos.")
         msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
         msg.setWordWrap(True)
         msg.setStyleSheet("color: #aaa;")
 
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, parent=self)
         btns.accepted.connect(self.accept)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(18, 18, 18, 18)
-        lay.setSpacing(12)
-        lay.addWidget(logolabel)
-        lay.addWidget(title)
-        lay.addWidget(ver)
-        lay.addWidget(msg)
-        lay.addWidget(link)
-        lay.addStretch(1)
-        lay.addWidget(btns)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(12)
+        layout.addWidget(logolabel)
+        layout.addWidget(title)
+        layout.addWidget(ver)
+        layout.addWidget(msg)
+        layout.addWidget(link)
+        layout.addStretch(1)
+        layout.addWidget(btns)
+
+
+# Custom 'DialogCompleted'
+class DialogCompleted(QDialog):
+    """
+    Modal dialog to notify the user that cleanup is complete.
+    Shows a 128×128 PNG icon, a confirmation message, and a close button.
+    Centers relative to the parent window and supports the standard close.
+    """
+
+    # Function '__init__'
+    def __init__(self, parent: Optional[QWidget], error_message: Optional[str] = None):
+        """
+        Build the completion dialog with icon, text and a Close button.
+        Attempts to load an app icon from known locations with fallbacks.
+        Keeps the layout compact and visually centered in the parent.
+        """
+        super().__init__(parent)
+        self.setWindowTitle("Cleanup Completed" if not error_message else "Cleanup Failed")
+        self.setModal(True)
+        self.setMinimumSize(420, 280)
+
+        iconlabel = QLabel()
+        iconlabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        iconpath = [
+            Path("/usr/share/mediasane/icons/success.png")
+        ] if not error_message else [
+            Path("/usr/share/mediasane/icons/error.png")
+        ]
+        pix: Optional[QPixmap] = None
+        for pth in iconpath:
+            if pth.is_file():
+                tmp = QPixmap(str(pth))
+                if not tmp.isNull():
+                    pix = tmp
+                    break
+        if pix:
+            iconlabel.setPixmap(
+                pix.scaled(
+                    96, 96,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation
+                )
+            )
+
+        title = QLabel("<b>Renaming finished successfully</b>" if not error_message else "<b>Renaming failed</b>")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        msg = QLabel(
+            "All selected files have been processed\n"
+            "You can safely close this window"
+            if not error_message else
+            f"{error_message}\nPlease review logs or try again"
+        )
+        msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        msg.setWordWrap(True)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Close, parent=self)
+        btns.rejected.connect(self.reject)
+        btns.accepted.connect(self.accept)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(12)
+        layout.addWidget(iconlabel)
+        layout.addSpacing(10)
+        layout.addWidget(title)
+        layout.addWidget(msg)
+        layout.addStretch(1)
+        layout.addSpacing(10)
+        layout.addWidget(btns)
+
+    # Function 'showcenter'
+    def showcenter(self):
+        """
+        Show the dialog centered over its parent window.
+        Adjusts size before placement to ensure correct centering.
+        Uses the parent's geometry for accurate positioning.
+        """
+        self.adjustSize()
+        if self.parent() and isinstance(self.parent(), QWidget):
+            parent: QWidget = self.parent()
+            center = parent.geometry().center()
+            self.move(center - self.rect().center())
+        self.exec()
 
 
 # Class 'MediaSane'
@@ -759,6 +847,9 @@ class MediaSane(QWidget):
     """Main PyQt GUI for MediaSane's rename workflow.
     Provides source/output selection, options, and progress.
     Streams results into a table while a worker thread runs."""
+
+    # Signal emitted when a run completes (success flag, error text)
+    completed = pyqtSignal(bool, str)
 
     # Define '__init__'
     def __init__(self):
@@ -884,6 +975,10 @@ class MediaSane(QWidget):
         # If user pastes a path manually
         self.srcedit.editingFinished.connect(self.populatetext)
 
+        # Connect completion signal and prepare fade animation holder
+        self.completed.connect(self.complethandler)
+        self.fadeanimation: Optional[QPropertyAnimation] = None
+
     # Function 'populatetext'
     def populatetext(self):
         """Populate table when user types a valid source path.
@@ -937,7 +1032,7 @@ class MediaSane(QWidget):
         if obj is self and ev.type() in (QEvent.Type.Resize, QEvent.Type.Show):
             self.ensureposition()
         return super().eventFilter(obj, ev)
-    
+
     # Function 'pickdir'
     def pickdir(self, edit: QLineEdit):
         """Open a directory chooser and store the chosen path.
@@ -1069,18 +1164,65 @@ class MediaSane(QWidget):
             """Run the renamer and restore UI state on finish.
             Catches common runtime errors and reports them as rows.
             Always re-enables buttons and hides the progress bar."""
+            success = True
+            errmsg = ""
             try:
                 self.worker.run()
             except (RuntimeError, OSError, ValueError, subprocess.SubprocessError) as e:
+                success = False
+                errmsg = f"{e}"
                 self.rowqueue.put(("ERROR", str(e)))
             finally:
                 self.progress.setVisible(False)
                 self.btnstop.setEnabled(False)
                 self.btnrun.setEnabled(True)
                 self.btndry.setEnabled(True)
+                try:
+                    self.completed.emit(success, errmsg)
+                except RuntimeError:
+                    pass
 
         self.workerthread = threading.Thread(target=workload, daemon=True)
         self.workerthread.start()
+
+    # Function 'complethandler'
+    def complethandler(self, success: bool, errmsg: str):
+        """Show a centered popup notifying completion or failure.
+        Mirrors BlitzClean behavior and then fades the table out.
+        Invoked via the 'completed' signal at the end of a run."""
+        # Only show popup and fade when running in live mode (not dry-run).
+        if self.worker and self.worker.opts.dryrun:
+            return
+        dlg = DialogCompleted(self, error_message=(errmsg if not success else None))
+        dlg.showcenter()
+        self.fadecleaner()
+
+    # Function 'fadecleaner'
+    def fadecleaner(self):
+        """Fade out the table contents with a short animation.
+        Clears rows after fade and restores full opacity effect.
+        Provides a neat visual ending to the processing run."""
+        if self.table.rowCount() == 0:
+            return
+
+        effect = QGraphicsOpacityEffect(self.table)
+        self.table.setGraphicsEffect(effect)
+        effect.setOpacity(1.0)
+
+        anim = QPropertyAnimation(effect, b"opacity", self)
+        anim.setDuration(700)
+        anim.setStartValue(1.0)
+        anim.setEndValue(0.0)
+
+        # Function 'afterfade'
+        def afterfade():
+            """Finalize fade by clearing the table and removing effect."""
+            self.table.setRowCount(0)
+            self.table.setGraphicsEffect(None)
+
+        anim.finished.connect(afterfade)
+        self.fadeanimation = anim
+        anim.start()
 
 
 # Class 'AppEntry'

@@ -14,7 +14,7 @@ appname="MediaSane"
 debname="mediasane"
 
 # Define 'debvers'
-debvers="1.1.4"
+debvers="1.1.6"
 
 # Define 'debarch'
 debarch="all"
@@ -43,6 +43,7 @@ mkdir -p "${pkgroot}/DEBIAN"
 mkdir -p "${pkgroot}/usr/bin"
 mkdir -p "${pkgroot}/usr/share/applications"
 mkdir -p "${pkgroot}/usr/share/pixmaps"
+mkdir -p "${pkgroot}/usr/share/${debname}/icons"
 
 # Create 'control' file
 cat > "${pkgroot}/DEBIAN/control" <<EOF
@@ -67,6 +68,7 @@ echo "Clean legacy locations from old packages..."
 rm -f /usr/local/bin/mediasane
 rm -f /usr/share/pixmaps/mediasane.png
 rm -f /usr/share/applications/mediasane.desktop
+rm -rf /usr/share/mediasane
 sleep 1s
 exit 0
 EOF
@@ -87,23 +89,27 @@ chmod 0755 "${pkgroot}/DEBIAN/preinst" "${pkgroot}/DEBIAN/postinst"
 # Ensure your main.py has a Python3 shebang '#!/usr/bin/env python3'
 install -m 0755 "${execfile}" "${pkgroot}${execpath}"
 
-# Install package icon
+# Install package logo
 install -m 0644 "assets/images/${debname}.png" "${pkgroot}/usr/share/pixmaps/${debname}.png"
+
+# Install package icons
+install -m 0644 "assets/icons/error.png" "${pkgroot}/usr/share/${debname}/icons/error.png"
+install -m 0644 "assets/icons/success.png" "${pkgroot}/usr/share/${debname}/icons/success.png"
 
 # Create desktop launcher
 cat > "${pkgroot}/usr/share/applications/${debname}.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=${appname}
-GenericName=System Cleanup
-Comment=Ubuntu cleanup GUI for caches, logs, snaps and more
+GenericName=Media Organizer & Renamer
+Comment=Organize and rename photos/videos by date; de-duplicate safely
 Exec=${execpath}
 TryExec=${execpath}
 Icon=/usr/share/pixmaps/${debname}.png
 Terminal=false
-Categories=System;Utility;
+Categories=Graphics;Photography;AudioVideo;Utility;
 StartupNotify=true
-Keywords=cleanup;cache;system;maintenance;ubuntu;
+Keywords=media;photos;pictures;images;videos;rename;organize;exif;duplicate;dedupe;album;
 EOF
 chmod 0644 "${pkgroot}/usr/share/applications/${debname}.desktop"
 
