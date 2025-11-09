@@ -12,7 +12,7 @@ import threading
 import time
 import uuid
 
-# Import packages
+# Import PIP packages
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -48,7 +48,7 @@ from typing import Optional
 from typing import Tuple
 
 # Define 'VERSION'
-VERSION = "v1.1.6"
+VERSION = "v1.1.7"
 
 # Define 'APPNAME'
 APPNAME = "MediaSane"
@@ -57,10 +57,10 @@ APPNAME = "MediaSane"
 WEBSITEURL = "https://neoslab.com/"
 
 # Define 'CONFIGPATH'
-CONFIGPATH = Path.home() / ".config" / "mediasane"
+CONFIGPATH = Path.home()/".config"/"mediasane"
 
 # Define 'CONFIGFILE'
-CONFIGFILE = CONFIGPATH / "config"
+CONFIGFILE = CONFIGPATH/"mediasane.conf"
 
 # Define 'ALLOWIMG'
 ALLOWIMG = set("jpg jpeg png gif tif tiff bmp webp heic heif".split())
@@ -700,30 +700,20 @@ class DialogAbout(QDialog):
 
         logolabel = QLabel()
         logolabel.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        cpaths = [
-            Path("/usr/share/pixmaps/mediasane.png"),
-            Path(__file__).resolve().parent / "logo.png",
-            CONFIGPATH / "logo.png",
+        logopath = [
+            Path("/usr/share/pixmaps/mediasane.png")
         ]
 
         pixmap: Optional[QPixmap] = None
-        for cpath in cpaths:
-            if cpath.is_file():
-                tmp = QPixmap(str(cpath))
+        for pth in logopath:
+            if pth.is_file():
+                tmp = QPixmap(str(pth))
                 if not tmp.isNull():
                     pixmap = tmp
                     break
 
         if pixmap:
-            logolabel.setPixmap(
-                pixmap.scaled(
-                    96, 96,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
-                )
-            )
-        else:
-            logolabel.setText("🧹")
+            logolabel.setPixmap(pixmap.scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
         title = QLabel(f"<b>Mediasane</b>")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -739,10 +729,10 @@ class DialogAbout(QDialog):
 
         msg = QLabel(
             "Media organizer and renamer\n"
-            "De-duplicate, and safely move photos/videos.")
+            "De-duplicate, and safely move photos/videos")
         msg.setAlignment(Qt.AlignmentFlag.AlignCenter)
         msg.setWordWrap(True)
-        msg.setStyleSheet("color: #aaa;")
+        msg.setStyleSheet("color: #999;")
 
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok, parent=self)
         btns.accepted.connect(self.accept)
@@ -785,6 +775,7 @@ class DialogCompleted(QDialog):
         ] if not error_message else [
             Path("/usr/share/mediasane/icons/error.png")
         ]
+
         pix: Optional[QPixmap] = None
         for pth in iconpath:
             if pth.is_file():
@@ -793,13 +784,7 @@ class DialogCompleted(QDialog):
                     pix = tmp
                     break
         if pix:
-            iconlabel.setPixmap(
-                pix.scaled(
-                    96, 96,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation
-                )
-            )
+            iconlabel.setPixmap(pix.scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
 
         title = QLabel("<b>Renaming finished successfully</b>" if not error_message else "<b>Renaming failed</b>")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -864,8 +849,7 @@ class MediaSane(QWidget):
         self.worker: Optional[MediaRenamer] = None
         self.rowqueue: "queue.Queue[Tuple[str,str]]" = queue.Queue()
 
-        # Progress counter state
-        self.total_files: int = 0
+        self.totalfiles: int = 0
         self.namecount: int = 0
         self.rowindex: Dict[str, int] = {}
 
@@ -888,17 +872,25 @@ class MediaSane(QWidget):
         self.srcedit = QLineEdit()
         self.srcbtn = QPushButton("Browse…")
         self.srcbtn.clicked.connect(lambda: self.pickdir(self.srcedit))
+
         self.outedit = QLineEdit()
         self.outbtn = QPushButton("Browse…")
         self.outbtn.clicked.connect(lambda: self.pickdir(self.outedit))
 
+        self.srclabel = QLabel("Source:")
+        self.outlabel = QLabel("Output:")
+
+        labelwidth = max(self.srclabel.sizeHint().width(), self.outlabel.sizeHint().width())
+        self.srclabel.setFixedWidth(labelwidth)
+        self.outlabel.setFixedWidth(labelwidth)
+
         srcrow = QHBoxLayout()
-        srcrow.addWidget(QLabel("Source:"))
+        srcrow.addWidget(self.srclabel)
         srcrow.addWidget(self.srcedit, 1)
         srcrow.addWidget(self.srcbtn)
 
         outrow = QHBoxLayout()
-        outrow.addWidget(QLabel("Output:"))
+        outrow.addWidget(self.outlabel)
         outrow.addWidget(self.outedit, 1)
         outrow.addWidget(self.outbtn)
 
@@ -945,7 +937,6 @@ class MediaSane(QWidget):
         root.addWidget(self.progress)
         self.setLayout(root)
 
-        # Floating counter
         self.counterbox = QWidget(self)
         self.counterbox.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         v = QVBoxLayout(self.counterbox)
@@ -966,16 +957,12 @@ class MediaSane(QWidget):
         self.timer.timeout.connect(self.flushrows)
         self.timer.start(50)
 
-        # Load prefs only
         cfg = ConfigManager.load()
         self.prefs = ExecPrefs.fromdict(cfg)
         self.srcedit.setText("")
         self.outedit.setText("")
-
-        # If user pastes a path manually
         self.srcedit.editingFinished.connect(self.populatetext)
 
-        # Connect completion signal and prepare fade animation holder
         self.completed.connect(self.complethandler)
         self.fadeanimation: Optional[QPropertyAnimation] = None
 
@@ -1006,9 +993,9 @@ class MediaSane(QWidget):
             self.table.setItem(r, 0, QTableWidgetItem(str(fpath)))
             self.table.setItem(r, 1, QTableWidgetItem(""))
             self.rowindex[str(fpath)] = r
-        self.total_files = len(paths)
+        self.totalfiles = len(paths)
         self.namecount = 0
-        self.countervalue.setText(f"{self.namecount}/{self.total_files}")
+        self.countervalue.setText(f"{self.namecount}/{self.totalfiles}")
         self.counterbox.adjustSize()
         self.ensureposition()
 
@@ -1042,8 +1029,8 @@ class MediaSane(QWidget):
         if d:
             edit.setText(d)
             other = {
-                "last_src": self.srcedit.text().strip(),
-                "last_out": self.outedit.text().strip(),
+                "lastsrc": self.srcedit.text().strip(),
+                "lastout": self.outedit.text().strip(),
             }
             ConfigManager.save(self.prefs, other)
             if edit is self.srcedit:
@@ -1059,11 +1046,11 @@ class MediaSane(QWidget):
                 old, new = self.rowqueue.get_nowait()
                 if old == "__TOTAL__":
                     try:
-                        self.total_files = int(new)
+                        self.totalfiles = int(new)
                     except ValueError:
                         pass
                     self.namecount = 0
-                    self.countervalue.setText(f"{self.namecount}/{self.total_files}")
+                    self.countervalue.setText(f"{self.namecount}/{self.totalfiles}")
                     self.counterbox.adjustSize()
                     self.ensureposition()
                     continue
@@ -1073,7 +1060,7 @@ class MediaSane(QWidget):
                         self.namecount = int(new)
                     except ValueError:
                         pass
-                    self.countervalue.setText(f"{self.namecount}/{self.total_files}")
+                    self.countervalue.setText(f"{self.namecount}/{self.totalfiles}")
                     self.counterbox.adjustSize()
                     self.ensureposition()
                     continue
@@ -1107,8 +1094,8 @@ class MediaSane(QWidget):
         if dlg.exec() == QDialog.DialogCode.Accepted:
             self.prefs = dlg.values()
             other = {
-                "last_src": self.srcedit.text().strip(),
-                "last_out": self.outedit.text().strip(),
+                "lastsrc": self.srcedit.text().strip(),
+                "lastout": self.outedit.text().strip(),
             }
             ConfigManager.save(self.prefs, other)
 
@@ -1190,7 +1177,6 @@ class MediaSane(QWidget):
         """Show a centered popup notifying completion or failure.
         Mirrors BlitzClean behavior and then fades the table out.
         Invoked via the 'completed' signal at the end of a run."""
-        # Only show popup and fade when running in live mode (not dry-run).
         if self.worker and self.worker.opts.dryrun:
             return
         dlg = DialogCompleted(self, error_message=(errmsg if not success else None))
