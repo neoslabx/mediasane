@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # Define 'devname'
-devname="NeosLab"
+devname="Sqoove"
 
 # Define 'devmail'
-devmail="info@neoslab.com"
+devmail="support@sqoove.com"
 
 # Define 'appname'
 appname="MediaSane"
@@ -14,7 +14,7 @@ appname="MediaSane"
 debname="mediasane"
 
 # Define 'debvers'
-debvers="1.1.7"
+debvers="1.1.8"
 
 # Define 'debarch'
 debarch="all"

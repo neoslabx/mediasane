@@ -28,6 +28,7 @@
 ![Screenshot #1](screenshots/screenshot-1.png)
 ![Screenshot #2](screenshots/screenshot-2.png)
 ![Screenshot #3](screenshots/screenshot-3.png)
+![Screenshot #4](screenshots/screenshot-4.png)
 
 * * *
 
@@ -49,11 +50,11 @@ sudo apt install -y python3-pyqt6 exiftool
 
 ## Installation
 
-Download the latest DEB version from the [releases](https://github.com/neoslabx/mediasane/releases/) section (the current version is v1.1.7) and use the following command:
+Download the latest DEB version from the [releases](https://github.com/sqoove/mediasane/releases/) section (the current version is v1.1.7) and use the following command:
 
 ```bash
 cd /tmp/
-wget https://github.com/neoslabx/mediasane/releases/download/v1.1.7/mediasane_1.1.7_all.deb
+wget https://github.com/sqoove/mediasane/releases/download/v1.1.7/mediasane_1.1.7_all.deb
 sudo dpkg -i mediasane_1.1.7_all.deb
 ```
 
@@ -158,7 +159,7 @@ Core components (in this repository):
 Set up a Python environment and install dependencies:
 
 ```bash
-git clone https://github.com/neoslabx/mediasane
+git clone https://github.com/sqoove/mediasane
 cd mediasane
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
