@@ -74,7 +74,7 @@ sudo dpkg -i mediasane_1.1.8_all.deb
 4. Choose **Dry-Run** to preview the plan or **Run** to execute.
    Use **Stop** to cancel safely.
 
-### What you’ll see in the table
+### What you'll see in the table
 
 * **Original Path** → **New Path / Result**
 * A final destination path when a rename is planned/done.
@@ -113,7 +113,7 @@ For each file, MediaSane chooses the best available date:
 1. **Leading date in the current filename** (e.g. `20240421_*`)
 2. **EXIF/metadata** via `exiftool` (`DateTimeOriginal`, `CreateDate`, `MediaCreateDate`, `FileModifyDate`)
 3. **File modification time**
-4. **Today’s date** (last resort)
+4. **Today's date** (last resort)
 
 Dates are rendered as `YYYYMMDD`.
 
@@ -176,7 +176,7 @@ python main.py
 Cannot find reference 'connect' in 'pyqtSignal | function'
 ```
 
-**Fix (stub tweak):** Edit `QtCore.pyi` in your environment’s `site-packages/PyQt6` and add `connect`/`emit` to `pyqtSignal`:
+**Fix (stub tweak):** Edit `QtCore.pyi` in your environment's `site-packages/PyQt6` and add `connect`/`emit` to `pyqtSignal`:
 
 ```python
 # Support for new-style signals and slots.
@@ -208,7 +208,7 @@ Unexpected type(s):(Literal[StandardButton.Cancel])
 Possible type(s):(Literal[StandardButton.Ok])(Literal[StandardButton.Ok])
 ```
 
-**Cause:** Some PyQt6 stubs model `setStandardButtons` as a single `StandardButton`, but at runtime it’s a flag enum, so `Ok | Cancel` gets flagged.
+**Cause:** Some PyQt6 stubs model `setStandardButtons` as a single `StandardButton`, but at runtime it's a flag enum, so `Ok | Cancel` gets flagged.
 
 ```python
 from typing import cast
@@ -264,4 +264,4 @@ This project is licensed under the MIT License. See the [LICENSE](LICENSE) file 
 
 ## Contact
 
-For issues, ideas, or questions, please open a **GitHub Issue** on the repository or contact the maintainer via the project’s issues page for follow-up.
+For issues, ideas, or questions, please open a **GitHub Issue** on the repository or contact the maintainer via the project's issues page for follow-up.
